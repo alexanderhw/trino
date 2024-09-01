@@ -833,7 +833,11 @@ public class ExpressionAnalyzer
 
             Type baseType = process(node.getBase(), context);
             if (!(baseType instanceof RowType rowType)) {
-                throw semanticException(TYPE_MISMATCH, node.getBase(), "Expression %s is not of type ROW", node.getBase());
+                if (baseType.getTypeSignature().getBase().equals("ObjectId")) {
+                    node.setField(null);
+                } else {
+                    throw semanticException(TYPE_MISMATCH, node.getBase(), "Expression %s is not of type ROW", node.getBase());
+                }
             }
 
             Identifier field = node.getField().orElseThrow();
@@ -841,6 +845,7 @@ public class ExpressionAnalyzer
 
             boolean foundFieldName = false;
             Type rowFieldType = null;
+            RowType rowType = (RowType) baseType;
             for (RowType.Field rowField : rowType.getFields()) {
                 if (fieldName.equalsIgnoreCase(rowField.getName().orElse(null))) {
                     if (foundFieldName) {

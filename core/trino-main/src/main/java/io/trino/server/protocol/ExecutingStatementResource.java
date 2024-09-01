@@ -13,6 +13,8 @@
  */
 package io.trino.server.protocol;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.Ordering;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -25,6 +27,7 @@ import io.trino.Session;
 import io.trino.client.ProtocolHeaders;
 import io.trino.exchange.ExchangeManagerRegistry;
 import io.trino.execution.QueryManager;
+import io.trino.metadata.QueryContext;
 import io.trino.operator.DirectExchangeClientSupplier;
 import io.trino.server.DisconnectionAwareAsyncResponse;
 import io.trino.server.ExternalUriInfo;
@@ -43,9 +46,12 @@ import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.container.Suspended;
+import jakarta.ws.rs.core.Context;
+import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.Response.ResponseBuilder;
+import org.json.simple.JSONObject;
 
 import java.net.URLEncoder;
 import java.util.Map.Entry;
@@ -153,6 +159,7 @@ public class ExecutingStatementResource
     @Path("{queryId}/{slug}/{token}")
     @Produces(MediaType.APPLICATION_JSON)
     public void getQueryResults(
+            @Context HttpHeaders headers,
             @PathParam("queryId") QueryId queryId,
             @PathParam("slug") String slug,
             @PathParam("token") long token,
@@ -161,8 +168,10 @@ public class ExecutingStatementResource
             @BeanParam ExternalUriInfo externalUriInfo,
             @Suspended @BeanParam DisconnectionAwareAsyncResponse asyncResponse)
     {
+        log.info("Headers: " + JSONObject.toJSONString(headers.getRequestHeaders()));
+        QueryContext queryContext = new QueryContext();
         Query query = getQuery(queryId, slug, token);
-        asyncQueryResults(query, token, maxWait, targetResultSize, externalUriInfo, asyncResponse);
+        asyncQueryResults(queryContext, query, token, maxWait, targetResultSize, externalUriInfo, asyncResponse);
     }
 
     protected Query getQuery(QueryId queryId, String slug, long token)
@@ -203,6 +212,7 @@ public class ExecutingStatementResource
     }
 
     private void asyncQueryResults(
+            QueryContext queryContext,
             Query query,
             long token,
             Duration maxWait,
@@ -217,7 +227,7 @@ public class ExecutingStatementResource
         else {
             targetResultSize = Ordering.natural().min(targetResultSize, MAX_TARGET_RESULT_SIZE);
         }
-        ListenableFuture<QueryResultsResponse> queryResultsFuture = query.waitForResults(token, externalUriInfo, wait, targetResultSize);
+        ListenableFuture<QueryResultsResponse> queryResultsFuture = query.waitForResults(queryContext, token, externalUriInfo, wait, targetResultSize);
 
         ListenableFuture<Response> response = Futures.transform(queryResultsFuture, this::toResponse, directExecutor());
 

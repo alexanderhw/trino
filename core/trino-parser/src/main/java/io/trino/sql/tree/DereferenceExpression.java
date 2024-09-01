@@ -26,11 +26,15 @@ public class DereferenceExpression
         extends Expression
 {
     private final Expression base;
-    private final Optional<Identifier> field;
+    private Optional<Identifier> field;
 
     public DereferenceExpression(Expression base, Identifier field)
     {
         this(Optional.empty(), base, Optional.of(field));
+    }
+
+    public void setField(Identifier field) {
+        this.field = Optional.of(field);
     }
 
     public DereferenceExpression(NodeLocation location, Expression base, Identifier field)

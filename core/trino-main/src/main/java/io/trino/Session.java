@@ -23,6 +23,7 @@ import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.opentelemetry.api.trace.Span;
 import io.trino.client.ProtocolHeaders;
+import io.trino.metadata.QueryContext;
 import io.trino.metadata.SessionPropertyManager;
 import io.trino.security.AccessControl;
 import io.trino.security.SecurityContext;
@@ -64,6 +65,7 @@ import static java.util.Objects.requireNonNull;
 
 public final class Session
 {
+    private final QueryContext queryContext;
     private final QueryId queryId;
     private final Span querySpan;
     private final Optional<TransactionId> transactionId;
@@ -93,6 +95,7 @@ public final class Session
     private final Optional<Slice> exchangeEncryptionKey;
 
     public Session(
+            QueryContext queryContext,
             QueryId queryId,
             Span querySpan,
             Optional<TransactionId> transactionId,
@@ -120,6 +123,7 @@ public final class Session
             ProtocolHeaders protocolHeaders,
             Optional<Slice> exchangeEncryptionKey)
     {
+        this.queryContext = queryContext;
         this.queryId = requireNonNull(queryId, "queryId is null");
         this.querySpan = requireNonNull(querySpan, "querySpan is null");
         this.transactionId = requireNonNull(transactionId, "transactionId is null");
@@ -357,6 +361,7 @@ public final class Session
         }
 
         return new Session(
+                queryContext,
                 queryId,
                 querySpan,
                 Optional.of(transactionId),
@@ -408,6 +413,7 @@ public final class Session
         }
 
         return new Session(
+                queryContext,
                 queryId,
                 querySpan,
                 transactionId,
@@ -440,6 +446,7 @@ public final class Session
     {
         checkState(exchangeEncryptionKey.isEmpty(), "exchangeEncryptionKey is already present");
         return new Session(
+                queryContext,
                 queryId,
                 querySpan,
                 transactionId,
@@ -490,6 +497,7 @@ public final class Session
     public SessionRepresentation toSessionRepresentation()
     {
         return new SessionRepresentation(
+                queryContext,
                 queryId.toString(),
                 querySpan,
                 transactionId,
@@ -630,6 +638,7 @@ public final class Session
 
     public static class SessionBuilder
     {
+        private QueryContext queryContext;
         private QueryId queryId;
         private Span querySpan = Span.getInvalid();
         private TransactionId transactionId;
@@ -933,6 +942,7 @@ public final class Session
         public Session build()
         {
             return new Session(
+                    queryContext,
                     queryId,
                     querySpan,
                     Optional.ofNullable(transactionId),

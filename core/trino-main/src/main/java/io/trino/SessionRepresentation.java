@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.slice.Slice;
 import io.opentelemetry.api.trace.Span;
+import io.trino.metadata.QueryContext;
 import io.trino.metadata.SessionPropertyManager;
 import io.trino.spi.QueryId;
 import io.trino.spi.security.BasicPrincipal;
@@ -42,6 +43,7 @@ import static java.util.Objects.requireNonNull;
 
 public final class SessionRepresentation
 {
+    private final QueryContext queryContext;
     private final String queryId;
     private final Span querySpan;
     private final Optional<TransactionId> transactionId;
@@ -74,7 +76,7 @@ public final class SessionRepresentation
 
     @JsonCreator
     public SessionRepresentation(
-            @JsonProperty("queryId") String queryId,
+            QueryContext queryContext, @JsonProperty("queryId") String queryId,
             @JsonProperty("querySpan") Span querySpan,
             @JsonProperty("transactionId") Optional<TransactionId> transactionId,
             @JsonProperty("clientTransactionSupport") boolean clientTransactionSupport,
@@ -104,6 +106,7 @@ public final class SessionRepresentation
             @JsonProperty("preparedStatements") Map<String, String> preparedStatements,
             @JsonProperty("protocolName") String protocolName)
     {
+        this.queryContext = queryContext;
         this.queryId = requireNonNull(queryId, "queryId is null");
         this.querySpan = requireNonNull(querySpan, "querySpan is null");
         this.transactionId = requireNonNull(transactionId, "transactionId is null");
@@ -353,6 +356,7 @@ public final class SessionRepresentation
     public Session toSession(SessionPropertyManager sessionPropertyManager, Map<String, String> extraCredentials, Optional<Slice> exchangeEncryptionKey)
     {
         return new Session(
+                queryContext,
                 new QueryId(queryId),
                 querySpan,
                 transactionId,

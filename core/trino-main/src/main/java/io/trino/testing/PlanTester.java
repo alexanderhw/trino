@@ -97,6 +97,7 @@ import io.trino.metadata.MaterializedViewPropertyManager;
 import io.trino.metadata.Metadata;
 import io.trino.metadata.MetadataManager;
 import io.trino.metadata.QualifiedObjectName;
+import io.trino.metadata.QueryContext;
 import io.trino.metadata.SchemaPropertyManager;
 import io.trino.metadata.SessionPropertyManager;
 import io.trino.metadata.Split;
@@ -471,6 +472,7 @@ public class PlanTester
 
         // rewrite session to use managed SessionPropertyMetadata
         this.defaultSession = new Session(
+                new QueryContext(),
                 defaultSession.getQueryId(),
                 Span.getInvalid(),
                 defaultSession.getTransactionId(),
