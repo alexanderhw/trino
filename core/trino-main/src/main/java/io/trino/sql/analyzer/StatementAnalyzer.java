@@ -22,6 +22,7 @@ import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.ListMultimap;
+import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Sets;
 import com.google.common.collect.Streams;
@@ -133,6 +134,7 @@ import io.trino.sql.tree.CallArgument;
 import io.trino.sql.tree.ColumnDefinition;
 import io.trino.sql.tree.Comment;
 import io.trino.sql.tree.Commit;
+import io.trino.sql.tree.ComparisonExpression;
 import io.trino.sql.tree.CreateCatalog;
 import io.trino.sql.tree.CreateMaterializedView;
 import io.trino.sql.tree.CreateSchema;
@@ -4851,6 +4853,23 @@ class StatementAnalyzer
                 ImmutableList.Builder<SelectExpression> selectExpressionBuilder)
         {
             Expression expression = singleColumn.getExpression();
+            if (expression instanceof DereferenceExpression dereferenceExpression && isMongoObjectIdDereference(dereferenceExpression)) {
+                Expression fixedExpression;
+                String base = ((Identifier) dereferenceExpression.getBase()).getValue();
+                String field = dereferenceExpression.getField().get().getValue();
+                fixedExpression = dereferenceExpression.getBase();
+                for (SelectItem selectItem : node.getSelect().getSelectItems()) {
+                    Expression itemExpression = ((SingleColumn) selectItem).getExpression();
+                    if (itemExpression instanceof DereferenceExpression d1) {
+                        String itemBase = ((Identifier) d1.getBase()).getValue();
+                        String itemField = d1.getField().get().getValue();
+                        if (itemBase.equalsIgnoreCase("_id") && itemField.equalsIgnoreCase("oid")) {
+                            expression = fixedExpression;
+                            ((SingleColumn) selectItem).setExpression(fixedExpression);
+                        }
+                    }
+                }
+            }
             ExpressionAnalysis expressionAnalysis = analyzeExpression(expression, scope);
             analysis.recordSubqueries(node, expressionAnalysis);
             outputExpressionBuilder.add(expression);
@@ -4866,10 +4885,39 @@ class StatementAnalyzer
             }
         }
 
+        private boolean isMongoObjectIdDereference(DereferenceExpression dereferenceExpression) {
+            String base = ((Identifier) dereferenceExpression.getBase()).getValue();
+            if (base.equalsIgnoreCase("_id")) {
+                String field = dereferenceExpression.getField().get().getValue();
+                return field.equalsIgnoreCase("oid");
+            }
+
+            return false;
+        }
+
         private void analyzeWhere(Node node, Scope scope, Expression predicate)
         {
             verifyNoAggregateWindowOrGroupingFunctions(session, functionResolver, accessControl, predicate, "WHERE clause");
 
+            if (predicate instanceof ComparisonExpression comparisonExpression) {
+                if (comparisonExpression.getLeft() instanceof DereferenceExpression leftDereference && isMongoObjectIdDereference(leftDereference) && comparisonExpression.getRight() instanceof StringLiteral stringLiteral) {
+                    Expression fixedExpression = leftDereference.getBase();
+                    comparisonExpression.setLeft(fixedExpression);
+                    String val = stringLiteral.getValue();
+                    QualifiedName name = QualifiedName.of("objectid");
+                    comparisonExpression.setRight(new FunctionCall(name, List.of(new StringLiteral(val))));
+                    ((QuerySpecification) node).setWhere(comparisonExpression);
+                }
+
+                if (comparisonExpression.getRight() instanceof DereferenceExpression rightDereference && isMongoObjectIdDereference(rightDereference) && comparisonExpression.getLeft() instanceof StringLiteral stringLiteral) {
+                    Expression fixedExpression = rightDereference.getBase();
+                    comparisonExpression.setRight(fixedExpression);
+                    String val = stringLiteral.getValue();
+                    QualifiedName name = QualifiedName.of("objectid");
+                    comparisonExpression.setLeft(new FunctionCall(name, List.of(new StringLiteral(val))));
+                    ((QuerySpecification) node).setWhere(comparisonExpression);
+                }
+            }
             ExpressionAnalysis expressionAnalysis = analyzeExpression(predicate, scope);
             analysis.recordSubqueries(node, expressionAnalysis);
 

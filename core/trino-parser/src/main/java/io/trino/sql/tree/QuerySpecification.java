@@ -28,7 +28,7 @@ public class QuerySpecification
 {
     private final Select select;
     private final Optional<Relation> from;
-    private final Optional<Expression> where;
+    private Optional<Expression> where;
     private final Optional<GroupBy> groupBy;
     private final Optional<Expression> having;
     private final List<WindowDefinition> windows;
@@ -102,6 +102,10 @@ public class QuerySpecification
         this.orderBy = orderBy;
         this.offset = offset;
         this.limit = limit;
+    }
+
+    public void setWhere(Expression where) {
+        this.where = Optional.of(where);
     }
 
     public Select getSelect()

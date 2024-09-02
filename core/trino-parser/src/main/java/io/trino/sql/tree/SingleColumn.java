@@ -25,7 +25,11 @@ public class SingleColumn
         extends SelectItem
 {
     private final Optional<Identifier> alias;
-    private final Expression expression;
+    private Expression expression;
+
+    public void setExpression(Expression expression) {
+        this.expression = requireNonNull(expression, "expression is null");
+    }
 
     public SingleColumn(Expression expression)
     {
