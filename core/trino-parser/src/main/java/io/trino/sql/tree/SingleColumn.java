@@ -24,8 +24,12 @@ import static java.util.Objects.requireNonNull;
 public class SingleColumn
         extends SelectItem
 {
-    private final Optional<Identifier> alias;
+    private Optional<Identifier> alias;
     private Expression expression;
+
+    public void setAlias(Identifier alias) {
+        this.alias = Optional.of(alias);
+    }
 
     public void setExpression(Expression expression) {
         this.expression = requireNonNull(expression, "expression is null");

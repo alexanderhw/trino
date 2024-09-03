@@ -91,6 +91,7 @@ public final class Session
     private final Map<String, String> preparedStatements;
     private final ProtocolHeaders protocolHeaders;
     private final Optional<Slice> exchangeEncryptionKey;
+    private boolean redirectMongoObjectId;
 
     public Session(
             QueryId queryId,
@@ -154,6 +155,14 @@ public final class Session
         this.catalogProperties = catalogPropertiesBuilder.buildOrThrow();
 
         checkArgument(catalog.isPresent() || schema.isEmpty(), "schema is set but catalog is not");
+    }
+
+    public boolean isRedirectMongoObjectId() {
+        return redirectMongoObjectId;
+    }
+
+    public void setRedirectMongoObjectId(boolean redirectMongoObjectId) {
+        this.redirectMongoObjectId = redirectMongoObjectId;
     }
 
     public QueryId getQueryId()

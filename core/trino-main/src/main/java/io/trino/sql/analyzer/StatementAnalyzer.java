@@ -4446,9 +4446,11 @@ class StatementAnalyzer
                 ImmutableList.Builder<Expression> groupingExpressions = ImmutableList.builder();
 
                 checkGroupingSetsCount(node.getGroupBy().get());
-                for (GroupingElement groupingElement : node.getGroupBy().get().getGroupingElements()) {
+                for (int i = 0; i < node.getGroupBy().get().getGroupingElements().size(); i++) {
+                    GroupingElement groupingElement = node.getGroupBy().get().getGroupingElements().get(i);
                     if (groupingElement instanceof SimpleGroupBy) {
-                        for (Expression column : groupingElement.getExpressions()) {
+                        for (int j = 0; j < groupingElement.getExpressions().size(); j++) {
+                            Expression column = groupingElement.getExpressions().get(j);
                             // simple GROUP BY expressions allow ordinals or arbitrary expressions
                             if (column instanceof LongLiteral) {
                                 long ordinal = ((LongLiteral) column).getParsedValue();
@@ -4458,8 +4460,14 @@ class StatementAnalyzer
 
                                 column = outputExpressions.get(toIntExact(ordinal - 1));
                                 verifyNoAggregateWindowOrGroupingFunctions(session, functionResolver, accessControl, column, "GROUP BY clause");
-                            }
-                            else {
+                            } else if (column instanceof DereferenceExpression dereferenceExpression && isMongoObjectIdDereference(dereferenceExpression)) {
+                                column = dereferenceExpression.getBase();
+                                List<Expression> newColumns = new ArrayList<>(groupingElement.getExpressions());
+                                newColumns.set(j, column);
+                                ((SimpleGroupBy) groupingElement).setColumns(newColumns);
+                                verifyNoAggregateWindowOrGroupingFunctions(session, functionResolver, accessControl, column, "GROUP BY clause");
+                                analyzeExpression(column, scope);
+                            } else {
                                 verifyNoAggregateWindowOrGroupingFunctions(session, functionResolver, accessControl, column, "GROUP BY clause");
                                 analyzeExpression(column, scope);
                             }
@@ -4854,20 +4862,49 @@ class StatementAnalyzer
         {
             Expression expression = singleColumn.getExpression();
             if (expression instanceof DereferenceExpression dereferenceExpression && isMongoObjectIdDereference(dereferenceExpression)) {
+                session.setRedirectMongoObjectId(true);
                 Expression fixedExpression;
-                String base = ((Identifier) dereferenceExpression.getBase()).getValue();
-                String field = dereferenceExpression.getField().get().getValue();
-                fixedExpression = dereferenceExpression.getBase();
+                if (dereferenceExpression.getBase() instanceof Identifier) {
+                    fixedExpression = dereferenceExpression.getBase();
+                } else if (dereferenceExpression.getBase() instanceof DereferenceExpression subDereferenceExpression) {
+                    if (subDereferenceExpression.getBase() instanceof Identifier) {
+                        fixedExpression = dereferenceExpression.getBase();
+                    } else {
+                        throw new RuntimeException("WiseMirror error, nested error");
+                    }
+                } else {
+                    throw new RuntimeException("WiseMirror error, not found type");
+                }
                 for (SelectItem selectItem : node.getSelect().getSelectItems()) {
                     Expression itemExpression = ((SingleColumn) selectItem).getExpression();
                     if (itemExpression instanceof DereferenceExpression d1) {
-                        String itemBase = ((Identifier) d1.getBase()).getValue();
-                        String itemField = d1.getField().get().getValue();
-                        if (itemBase.equalsIgnoreCase("_id") && itemField.equalsIgnoreCase("oid")) {
-                            expression = fixedExpression;
+                        if (d1.getBase() instanceof Identifier) {
+                            String itemBase = ((Identifier) d1.getBase()).getValue();
+                            String itemField = d1.getField().get().getValue();
+                            if (itemBase.equalsIgnoreCase("_id") && itemField.equalsIgnoreCase("oid")) {
+                                expression = fixedExpression;
+                                ((SingleColumn) selectItem).setExpression(fixedExpression);
+                                if (((SingleColumn) selectItem).getAlias().isEmpty()) {
+                                    ((SingleColumn) selectItem).setAlias(new Identifier("_id.oid"));
+                                }
+                            }
+                        } else if (d1.getBase() instanceof DereferenceExpression) {
+                            expression = d1.getBase();
                             ((SingleColumn) selectItem).setExpression(fixedExpression);
+                            if (((SingleColumn) selectItem).getAlias().isEmpty()) {
+                                ((SingleColumn) selectItem).setAlias(new Identifier("_id.oid"));
+                            }
                         }
                     }
+                }
+            } else if (expression instanceof FunctionCall functionCall) {
+                List<Expression> arguments = functionCall.getArguments();
+                for (int i = 0; i < arguments.size(); i++) {
+                    Expression arg = arguments.get(i);
+                    if (arg instanceof DereferenceExpression && isMongoObjectIdDereference(((DereferenceExpression) arg))) {
+                        arg = ((DereferenceExpression) arg).getBase();
+                    }
+                    arguments.set(i, arg);
                 }
             }
             ExpressionAnalysis expressionAnalysis = analyzeExpression(expression, scope);
@@ -4886,13 +4923,23 @@ class StatementAnalyzer
         }
 
         private boolean isMongoObjectIdDereference(DereferenceExpression dereferenceExpression) {
-            String base = ((Identifier) dereferenceExpression.getBase()).getValue();
-            if (base.equalsIgnoreCase("_id")) {
-                String field = dereferenceExpression.getField().get().getValue();
-                return field.equalsIgnoreCase("oid");
+            boolean res = false;
+            if (dereferenceExpression.getBase() instanceof Identifier) {
+                String base = ((Identifier) dereferenceExpression.getBase()).getValue();
+                if (base.equalsIgnoreCase("_id")) {
+                    String field = dereferenceExpression.getField().get().getValue();
+                    res = field.equalsIgnoreCase("oid");
+
+                }
+            } else if (dereferenceExpression.getBase() instanceof DereferenceExpression baseDereference && baseDereference.getBase() instanceof Identifier) {
+                String base = baseDereference.getField().get().getValue();
+                if (base.equalsIgnoreCase("_id")) {
+                    String field = dereferenceExpression.getField().get().getValue();
+                    res = field.equalsIgnoreCase("oid");
+                }
             }
 
-            return false;
+            return res;
         }
 
         private void analyzeWhere(Node node, Scope scope, Expression predicate)
@@ -5682,7 +5729,10 @@ class StatementAnalyzer
 
             for (SortItem item : sortItems) {
                 Expression expression = item.getSortKey();
-
+                if (expression instanceof DereferenceExpression dereferenceExpression && isMongoObjectIdDereference(dereferenceExpression)) {
+                    item.setSortKey(dereferenceExpression.getBase());
+                    expression = dereferenceExpression.getBase();
+                }
                 if (expression instanceof LongLiteral) {
                     // this is an ordinal in the output tuple
 

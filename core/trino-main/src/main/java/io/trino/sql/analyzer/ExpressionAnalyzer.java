@@ -131,6 +131,7 @@ import io.trino.sql.tree.ProcessingMode;
 import io.trino.sql.tree.QualifiedName;
 import io.trino.sql.tree.QuantifiedComparisonExpression;
 import io.trino.sql.tree.QueryColumn;
+import io.trino.sql.tree.QuerySpecification;
 import io.trino.sql.tree.RangeQuantifier;
 import io.trino.sql.tree.Row;
 import io.trino.sql.tree.RowPattern;
@@ -3615,6 +3616,25 @@ public class ExpressionAnalyzer
                 analyzer.getWindowFunctions());
     }
 
+    private boolean isMongoObjectIdDereference(DereferenceExpression dereferenceExpression) {
+        if (dereferenceExpression.getBase() instanceof Identifier) {
+            String base = ((Identifier) dereferenceExpression.getBase()).getValue();
+            if (base.equalsIgnoreCase("_id")) {
+                String field = dereferenceExpression.getField().get().getValue();
+                return field.equalsIgnoreCase("oid");
+            }
+        } else if (dereferenceExpression.getBase() instanceof DereferenceExpression baseDereference && baseDereference.getBase() instanceof Identifier baseIdentifier) {
+            String base = baseDereference.getField().get().getValue();
+            if (base.equalsIgnoreCase("_id")) {
+                String field = dereferenceExpression.getField().get().getValue();
+                return field.equalsIgnoreCase("oid");
+            }
+        }
+
+
+        return false;
+    }
+
     public static ExpressionAnalysis analyzeExpression(
             Session session,
             PlannerContext plannerContext,
@@ -3627,6 +3647,37 @@ public class ExpressionAnalyzer
             CorrelationSupport correlationSupport)
     {
         ExpressionAnalyzer analyzer = new ExpressionAnalyzer(plannerContext, accessControl, statementAnalyzerFactory, analysis, session, warningCollector);
+        if (expression instanceof ComparisonExpression comparisonExpression) {
+            Expression leftExpression = comparisonExpression.getLeft();
+            Expression rightExpression = comparisonExpression.getRight();
+            if (leftExpression instanceof DereferenceExpression leftDereferenceExpression && analyzer.isMongoObjectIdDereference(leftDereferenceExpression)) {
+                comparisonExpression.setLeft(leftDereferenceExpression.getBase());
+                if (rightExpression instanceof StringLiteral stringLiteral) {
+                    String val = stringLiteral.getValue();
+                    if (val != null && val.length() == 24) {
+                        // length of 24 is valid ObjectId literal
+                        QualifiedName name = QualifiedName.of("objectid");
+                        comparisonExpression.setRight(new FunctionCall(name, List.of(new StringLiteral(val))));
+                    } else {
+
+                    }
+                }
+            }
+            if (rightExpression instanceof DereferenceExpression rightDereferenceExpression && analyzer.isMongoObjectIdDereference(rightDereferenceExpression)) {
+                comparisonExpression.setRight(rightDereferenceExpression.getBase());
+                if (leftExpression instanceof StringLiteral stringLiteral) {
+                    String val = stringLiteral.getValue();
+                    if (val != null && val.length() == 24) {
+                        // length of 24 is valid ObjectId literal
+                        QualifiedName name = QualifiedName.of("objectid");
+                        comparisonExpression.setLeft(new FunctionCall(name, List.of(new StringLiteral(val))));
+                    } else {
+
+                    }
+                }
+            }
+
+        }
         analyzer.analyze(expression, scope, correlationSupport);
 
         updateAnalysis(analysis, analyzer, session, accessControl);

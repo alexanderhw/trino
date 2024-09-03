@@ -25,7 +25,11 @@ import static java.util.Objects.requireNonNull;
 public final class SimpleGroupBy
         extends GroupingElement
 {
-    private final List<Expression> columns;
+    private List<Expression> columns;
+
+    public void setColumns(List<Expression> columns) {
+        this.columns = ImmutableList.copyOf(requireNonNull(columns, "columns is null"));
+    }
 
     public SimpleGroupBy(List<Expression> simpleGroupByExpressions)
     {

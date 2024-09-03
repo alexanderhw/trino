@@ -34,9 +34,13 @@ public class SortItem
         FIRST, LAST, UNDEFINED
     }
 
-    private final Expression sortKey;
+    private Expression sortKey;
     private final Ordering ordering;
     private final NullOrdering nullOrdering;
+
+    public void setSortKey(Expression sortKey) {
+        this.sortKey = sortKey;
+    }
 
     public SortItem(Expression sortKey, Ordering ordering, NullOrdering nullOrdering)
     {
