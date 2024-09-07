@@ -24,7 +24,7 @@ import static java.util.Objects.requireNonNull;
 public class IsNotNullPredicate
         extends Expression
 {
-    private final Expression value;
+    private Expression value;
 
     public IsNotNullPredicate(Expression value)
     {
@@ -34,6 +34,10 @@ public class IsNotNullPredicate
     public IsNotNullPredicate(NodeLocation location, Expression value)
     {
         this(Optional.of(location), value);
+    }
+
+    public void setValue(Expression value) {
+        this.value = requireNonNull(value, "value is null");
     }
 
     private IsNotNullPredicate(Optional<NodeLocation> location, Expression value)

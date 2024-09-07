@@ -58,7 +58,7 @@ public class LogicalExpression
         checkArgument(terms.size() >= 2, "Expected at least 2 terms");
 
         this.operator = operator;
-        this.terms = ImmutableList.copyOf(terms);
+        this.terms = terms;
     }
 
     public Operator getOperator()

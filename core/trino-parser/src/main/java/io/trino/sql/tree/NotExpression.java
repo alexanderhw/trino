@@ -24,7 +24,11 @@ import static java.util.Objects.requireNonNull;
 public class NotExpression
         extends Expression
 {
-    private final Expression value;
+    private Expression value;
+
+    public void setValue(Expression value) {
+        this.value = value;
+    }
 
     public NotExpression(Expression value)
     {

@@ -79,6 +79,7 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -785,21 +786,51 @@ public class MongoSession
         MongoDatabase db = client.getDatabase(schemaName);
         MongoCollection<Document> schema = db.getCollection(schemaCollection);
 
-        Document doc = schema
-                .find(new Document(TABLE_NAME_KEY, tableName)).first();
+//        Document doc = schema
+//                .find(new Document(TABLE_NAME_KEY, tableName)).first();
+        Document doc = MongoExtensionHandler.getInstance().queryTableMetadata("", schemaName, tableName, "mongodb");
 
         if (doc == null) {
             if (!collectionExists(db, tableName)) {
                 throw new TableNotFoundException(new SchemaTableName(schemaName, tableName), format("Table '%s.%s' not found", schemaName, tableName), null);
             }
-            Document metadata = new Document(TABLE_NAME_KEY, tableName);
-            metadata.append(FIELDS_KEY, guessTableFields(schemaName, tableName));
-            if (!indexExists(schema)) {
-                schema.createIndex(new Document(TABLE_NAME_KEY, 1), new IndexOptions().unique(true));
+
+            Document mongoDoc = db.getCollection(tableName).find().first();
+            Document inMemDoc = new Document("table", tableName);
+            Document storeDoc = new Document("table", tableName);
+            ImmutableList.Builder<Document> inMemBuilder = ImmutableList.builder();
+            ImmutableList.Builder<Document> storeBuilder = ImmutableList.builder();
+            if (mongoDoc == null) {
+                inMemDoc.append("fields", inMemBuilder.build());
+                storeDoc.append("fields", storeBuilder.build());
+                return inMemDoc;
             }
 
-            schema.insertOne(metadata);
+            for (String key : mongoDoc.keySet()) {
+                Object value = mongoDoc.get(key);
+                Optional<TypeSignature> fieldType = guessFieldType(value);
+                if (fieldType.isPresent()) {
+                    String storeTypeName = fieldType.get().toString();
+                    Document inMemMetadata = new Document();
+                    inMemMetadata.append("name", key);
+                    inMemMetadata.append("type", storeTypeName);
+                    inMemMetadata.append("hidden", false);
+                    inMemBuilder.add(inMemMetadata);
 
+                    Document storeMetadata = new Document();
+                    storeMetadata.append("name", key);
+                    storeMetadata.append("type", storeTypeName.replaceAll("\"", "@"));
+                    storeMetadata.append("hidden", false);
+                    storeBuilder.add(storeMetadata);
+                }
+            }
+
+            inMemDoc.append("fields", inMemBuilder.build());
+            storeDoc.append("fields", storeBuilder.build());
+            Document metadata = new Document(TABLE_NAME_KEY, tableName);
+            metadata.append(FIELDS_KEY, guessTableFields(schemaName, tableName));
+
+            MongoExtensionHandler.getInstance().maintainTableMetadata("", schemaName, tableName, "mongodb", metadata);
             return metadata;
         }
 

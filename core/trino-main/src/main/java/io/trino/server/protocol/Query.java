@@ -13,6 +13,7 @@
  */
 package io.trino.server.protocol;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -27,6 +28,7 @@ import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.trino.Session;
 import io.trino.client.ClientCapabilities;
+import io.trino.client.ClientTypeSignature;
 import io.trino.client.Column;
 import io.trino.client.FailureInfo;
 import io.trino.client.QueryError;
@@ -50,15 +52,21 @@ import io.trino.server.ResultQueryInfo;
 import io.trino.spi.ErrorCode;
 import io.trino.spi.Page;
 import io.trino.spi.QueryId;
+import io.trino.spi.block.Block;
 import io.trino.spi.block.BlockEncodingSerde;
+import io.trino.spi.block.VariableWidthBlock;
+import io.trino.spi.block.VariableWidthBlockBuilder;
 import io.trino.spi.exchange.ExchangeId;
 import io.trino.spi.security.SelectedRole;
 import io.trino.spi.type.Type;
+import io.trino.spi.type.VarcharType;
 import io.trino.transaction.TransactionId;
 import io.trino.util.Ciphers;
 import jakarta.ws.rs.NotFoundException;
 
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -489,13 +497,28 @@ class Query
         startedTransactionId = queryInfo.startedTransactionId();
         clearTransactionId = queryInfo.clearTransactionId();
 
+        List<Column> fixedColumns = resultRows.getColumns().isPresent() ? new ArrayList<>(resultRows.getColumns().get()) : null;
+        if (fixedColumns != null && session.getSource().isPresent() && session.getSource().get().contains("grafana")) {
+            for (int i = 0; i < fixedColumns.size(); i++) {
+                Column column = fixedColumns.get(i);
+                if (column.getTypeSignature().getRawType().equals("row") || column.getTypeSignature().getRawType().equals("array")) {
+                    Column newCol = new Column(column.getName(), "varchar", new ClientTypeSignature("varchar"));
+                    fixedColumns.set(i, newCol);
+                } else if (column.getTypeSignature().getRawType().equals("ObjectId")) {
+                    Column newCol = new Column(column.getName(), "varchar", new ClientTypeSignature("varchar"));
+                    fixedColumns.set(i, newCol);
+                    resultRows.resetColumns();
+                }
+            }
+        }
+
         // first time through, self is null
         QueryResults queryResults = new QueryResults(
                 queryId.toString(),
                 getQueryInfoUri(queryInfoUrl, queryId, externalUriInfo),
                 partialCancelUri,
                 nextResultsUri,
-                resultRows.getColumns().orElse(null),
+                fixedColumns,
                 resultRows.isEmpty() ? null : resultRows, // client excepts null that indicates "no data"
                 toStatementStats(queryInfo),
                 toQueryError(queryInfo, typeSerializationException),

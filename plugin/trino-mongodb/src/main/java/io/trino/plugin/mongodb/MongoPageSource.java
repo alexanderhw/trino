@@ -18,6 +18,7 @@ import com.google.common.primitives.Shorts;
 import com.google.common.primitives.SignedBytes;
 import com.mongodb.DBRef;
 import com.mongodb.client.MongoCursor;
+import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.trino.spi.Page;
 import io.trino.spi.PageBuilder;
@@ -30,6 +31,7 @@ import io.trino.spi.block.RowBlockBuilder;
 import io.trino.spi.block.SqlMap;
 import io.trino.spi.block.SqlRow;
 import io.trino.spi.connector.ConnectorPageSource;
+import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.CharType;
 import io.trino.spi.type.DecimalType;
@@ -48,6 +50,7 @@ import org.bson.types.ObjectId;
 import org.joda.time.chrono.ISOChronology;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
 import java.util.List;
@@ -92,28 +95,47 @@ import static java.util.stream.Collectors.toList;
 public class MongoPageSource
         implements ConnectorPageSource
 {
+    private static final Logger log = Logger.get(MongoPageSource.class);
     private static final ISOChronology UTC_CHRONOLOGY = ISOChronology.getInstanceUTC();
     private static final int ROWS_PER_REQUEST = 1024;
 
     private final MongoCursor<Document> cursor;
     private final List<MongoColumnHandle> columns;
-    private final List<Type> columnTypes;
+    private List<Type> columnTypes;
     private Document currentDoc;
     private boolean finished;
+    private final ConnectorSession connectorSession;
 
     private final PageBuilder pageBuilder;
 
     public MongoPageSource(
+            ConnectorSession connectorSession,
             MongoSession mongoSession,
             MongoTableHandle tableHandle,
             List<MongoColumnHandle> columns)
     {
+        this.connectorSession = requireNonNull(connectorSession, "connectorSession is null");
         this.columns = ImmutableList.copyOf(requireNonNull(columns, "columns is null"));
         this.columnTypes = columns.stream().map(MongoColumnHandle::type).collect(toList());
         this.cursor = mongoSession.execute(tableHandle, columns);
         currentDoc = null;
 
-        pageBuilder = new PageBuilder(columnTypes);
+        List<Type> fixedColumnTypes = new ArrayList<>();
+        for (Type type : columnTypes) {
+            Class<?> javaType = type.getJavaType();
+            if (javaType == Block.class || javaType == Map.class || javaType == SqlRow.class) {
+                fixedColumnTypes.add(VarcharType.VARCHAR);
+            } else {
+                fixedColumnTypes.add(type);
+            }
+        }
+
+        if (connectorSession.getSource().isPresent() && connectorSession.getSource().get().contains("grafana")) {
+            pageBuilder = new PageBuilder(fixedColumnTypes);
+            columnTypes = fixedColumnTypes;
+        } else {
+            pageBuilder = new PageBuilder(columnTypes);
+        }
     }
 
     @Override
@@ -240,7 +262,12 @@ public class MongoPageSource
                 writeSlice(output, type, value);
             }
             else if (javaType == Block.class || javaType == SqlMap.class || javaType == SqlRow.class) {
-                writeBlock(output, type, value);
+                if (connectorSession.getSource().isPresent() && connectorSession.getSource().get().contains("grafana")) {
+                    type = VarcharType.createUnboundedVarcharType();
+                    type.writeSlice(output, utf8Slice(toVarcharValue(value.toString())));
+                } else {
+                    writeBlock(output, type, value);
+                }
             }
             else {
                 throw new TrinoException(GENERIC_INTERNAL_ERROR, "Unhandled type for " + javaType.getSimpleName() + ":" + type.getTypeSignature());

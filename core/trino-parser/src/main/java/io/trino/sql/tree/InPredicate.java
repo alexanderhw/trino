@@ -22,8 +22,12 @@ import java.util.Optional;
 public class InPredicate
         extends Expression
 {
-    private final Expression value;
+    private Expression value;
     private final Expression valueList;
+
+    public void setValue(Expression value) {
+        this.value = value;
+    }
 
     public InPredicate(Expression value, Expression valueList)
     {

@@ -22,7 +22,6 @@ import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.ListMultimap;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Sets;
 import com.google.common.collect.Streams;
@@ -131,6 +130,7 @@ import io.trino.sql.tree.Analyze;
 import io.trino.sql.tree.AstVisitor;
 import io.trino.sql.tree.Call;
 import io.trino.sql.tree.CallArgument;
+import io.trino.sql.tree.Cast;
 import io.trino.sql.tree.ColumnDefinition;
 import io.trino.sql.tree.Comment;
 import io.trino.sql.tree.Commit;
@@ -166,14 +166,17 @@ import io.trino.sql.tree.FieldReference;
 import io.trino.sql.tree.FrameBound;
 import io.trino.sql.tree.FunctionCall;
 import io.trino.sql.tree.FunctionSpecification;
+import io.trino.sql.tree.GenericDataType;
 import io.trino.sql.tree.Grant;
 import io.trino.sql.tree.GroupBy;
 import io.trino.sql.tree.GroupingElement;
 import io.trino.sql.tree.GroupingOperation;
 import io.trino.sql.tree.GroupingSets;
 import io.trino.sql.tree.Identifier;
+import io.trino.sql.tree.InPredicate;
 import io.trino.sql.tree.Insert;
 import io.trino.sql.tree.Intersect;
+import io.trino.sql.tree.IsNotNullPredicate;
 import io.trino.sql.tree.Join;
 import io.trino.sql.tree.JoinCriteria;
 import io.trino.sql.tree.JoinOn;
@@ -184,7 +187,9 @@ import io.trino.sql.tree.JsonTable;
 import io.trino.sql.tree.JsonTableColumnDefinition;
 import io.trino.sql.tree.JsonTableSpecificPlan;
 import io.trino.sql.tree.Lateral;
+import io.trino.sql.tree.LikePredicate;
 import io.trino.sql.tree.Limit;
+import io.trino.sql.tree.LogicalExpression;
 import io.trino.sql.tree.LongLiteral;
 import io.trino.sql.tree.MeasureDefinition;
 import io.trino.sql.tree.Merge;
@@ -197,6 +202,7 @@ import io.trino.sql.tree.NestedColumns;
 import io.trino.sql.tree.Node;
 import io.trino.sql.tree.NodeLocation;
 import io.trino.sql.tree.NodeRef;
+import io.trino.sql.tree.NotExpression;
 import io.trino.sql.tree.Offset;
 import io.trino.sql.tree.OrderBy;
 import io.trino.sql.tree.OrdinalityColumn;
@@ -4467,6 +4473,13 @@ class StatementAnalyzer
                                 ((SimpleGroupBy) groupingElement).setColumns(newColumns);
                                 verifyNoAggregateWindowOrGroupingFunctions(session, functionResolver, accessControl, column, "GROUP BY clause");
                                 analyzeExpression(column, scope);
+                            } else if (column instanceof FunctionCall functionCall) {
+                                List<Expression> arguments = functionCall.getArguments();
+                                for (int k = 0; k < arguments.size(); k++) {
+                                    Expression argument = arguments.get(i);
+                                    argument = recursivelyAnalyzeNonSelect(argument);
+                                    arguments.set(k, argument);
+                                }
                             } else {
                                 verifyNoAggregateWindowOrGroupingFunctions(session, functionResolver, accessControl, column, "GROUP BY clause");
                                 analyzeExpression(column, scope);
@@ -4853,6 +4866,90 @@ class StatementAnalyzer
             analysis.setSelectAllResultFields(allColumns, itemOutputFieldBuilder.build());
         }
 
+        private Expression recursivelyAnalyzeNonSelect(Expression predicate) {
+            if (predicate instanceof ComparisonExpression comparisonExpression) {
+                Expression leftExpression = comparisonExpression.getLeft();
+                Expression rightExpression = comparisonExpression.getRight();
+                leftExpression = recursiveAnalyzeSingleColumn(leftExpression);
+                rightExpression = recursiveAnalyzeSingleColumn(rightExpression);
+                comparisonExpression.setLeft(leftExpression);
+                comparisonExpression.setRight(rightExpression);
+                return comparisonExpression;
+            } else if (predicate instanceof InPredicate inPredicate) {
+                if (inPredicate.getValue() instanceof DereferenceExpression d && isMongoObjectIdDereference(d)) {
+                  Expression ic = recursivelyAnalyzeNonSelect(d);
+                  inPredicate.setValue(ic);
+                }
+                return inPredicate;
+            } else if (predicate instanceof NotExpression notExpression && notExpression.getValue() instanceof InPredicate inPredicate) {
+                Expression value = inPredicate.getValue();
+                if (value instanceof DereferenceExpression d && isMongoObjectIdDereference(d)) {
+                    Expression ic = recursivelyAnalyzeNonSelect(d);
+                    inPredicate.setValue(ic);
+                    notExpression.setValue(inPredicate);
+                }
+                return notExpression;
+            } else if (predicate instanceof LikePredicate likePredicate) {
+                Expression value = likePredicate.getValue();
+                if (value instanceof DereferenceExpression d && isMongoObjectIdDereference(d)) {
+                    Expression ic = recursivelyAnalyzeNonSelect(d);
+                    likePredicate.setValue(ic);
+                }
+                return likePredicate;
+            } else if (predicate instanceof LogicalExpression logicalExpression) {
+                for (int i = 0; i < logicalExpression.getTerms().size(); i++) {
+                    Expression termExpression = recursivelyAnalyzeNonSelect(logicalExpression.getTerms().get(i));
+                    logicalExpression.getTerms().set(i, termExpression);
+                }
+                return logicalExpression;
+            } else if (predicate instanceof IsNotNullPredicate isNotNullPredicate) {
+                Expression value = isNotNullPredicate.getValue();
+                if (value instanceof DereferenceExpression d && isMongoObjectIdDereference(d)) {
+                    isNotNullPredicate.setValue(d.getBase());
+                }
+                return isNotNullPredicate;
+            } else if (predicate instanceof DereferenceExpression d && isMongoObjectIdDereference(d)) {
+                Cast c = new Cast(d.getBase(), new GenericDataType(Optional.empty(), new Identifier("varchar"), new ArrayList<>()));
+                return c;
+            } else {
+                return predicate;
+            }
+        }
+
+        private Expression recursiveAnalyzeSingleColumn(Expression expression) {
+            if (expression instanceof FunctionCall functionCall) {
+                List<Expression> arguments = functionCall.getArguments();
+                for (int i = 0; i < arguments.size(); i++) {
+                    Expression arg = arguments.get(i);
+                    if (arg instanceof DereferenceExpression && isMongoObjectIdDereference(((DereferenceExpression) arg))) {
+                        arg = new Cast(((DereferenceExpression) arg).getBase(), new GenericDataType(Optional.empty(), new Identifier("varchar"), new ArrayList<>()));
+                    } else if (arg instanceof FunctionCall) {
+                        arg = recursiveAnalyzeSingleColumn(arg);
+                    } else if (arg instanceof Cast) {
+                        arg = recursiveAnalyzeSingleColumn(arg);
+                    }
+                    arguments.set(i, arg);
+                }
+                return expression;
+            } else if (expression instanceof Cast cast) {
+                Expression castExpression = cast.getExpression();
+                ((Cast) expression).setExpression(recursiveAnalyzeSingleColumn(castExpression));
+                return expression;
+            } else if (expression instanceof DereferenceExpression dereferenceExpression && isMongoObjectIdDereference(dereferenceExpression)) {
+                Expression fixedExpression = expression;
+                if (dereferenceExpression.getBase() instanceof Identifier) {
+                    fixedExpression = dereferenceExpression.getBase();
+                } else if (dereferenceExpression.getBase() instanceof DereferenceExpression subDereferenceExpression) {
+                    if (subDereferenceExpression.getBase() instanceof Identifier) {
+                        fixedExpression = dereferenceExpression.getBase();
+                    }
+                }
+                return fixedExpression;
+            } else {
+                return expression;
+            }
+        }
+
         private void analyzeSelectSingleColumn(
                 SingleColumn singleColumn,
                 QuerySpecification node,
@@ -4902,7 +4999,11 @@ class StatementAnalyzer
                 for (int i = 0; i < arguments.size(); i++) {
                     Expression arg = arguments.get(i);
                     if (arg instanceof DereferenceExpression && isMongoObjectIdDereference(((DereferenceExpression) arg))) {
-                        arg = ((DereferenceExpression) arg).getBase();
+                        arg = new Cast(((DereferenceExpression) arg).getBase(), new GenericDataType(Optional.empty(), new Identifier("varchar"), new ArrayList<>()));
+                    } else if (arg instanceof FunctionCall) {
+                        arg = recursiveAnalyzeSingleColumn(arg);
+                    } else if (arg instanceof Cast) {
+                        arg = recursiveAnalyzeSingleColumn(arg);
                     }
                     arguments.set(i, arg);
                 }
@@ -4945,26 +5046,8 @@ class StatementAnalyzer
         private void analyzeWhere(Node node, Scope scope, Expression predicate)
         {
             verifyNoAggregateWindowOrGroupingFunctions(session, functionResolver, accessControl, predicate, "WHERE clause");
-
-            if (predicate instanceof ComparisonExpression comparisonExpression) {
-                if (comparisonExpression.getLeft() instanceof DereferenceExpression leftDereference && isMongoObjectIdDereference(leftDereference) && comparisonExpression.getRight() instanceof StringLiteral stringLiteral) {
-                    Expression fixedExpression = leftDereference.getBase();
-                    comparisonExpression.setLeft(fixedExpression);
-                    String val = stringLiteral.getValue();
-                    QualifiedName name = QualifiedName.of("objectid");
-                    comparisonExpression.setRight(new FunctionCall(name, List.of(new StringLiteral(val))));
-                    ((QuerySpecification) node).setWhere(comparisonExpression);
-                }
-
-                if (comparisonExpression.getRight() instanceof DereferenceExpression rightDereference && isMongoObjectIdDereference(rightDereference) && comparisonExpression.getLeft() instanceof StringLiteral stringLiteral) {
-                    Expression fixedExpression = rightDereference.getBase();
-                    comparisonExpression.setRight(fixedExpression);
-                    String val = stringLiteral.getValue();
-                    QualifiedName name = QualifiedName.of("objectid");
-                    comparisonExpression.setLeft(new FunctionCall(name, List.of(new StringLiteral(val))));
-                    ((QuerySpecification) node).setWhere(comparisonExpression);
-                }
-            }
+            Expression fixedPredicate = recursivelyAnalyzeNonSelect(predicate);
+            ((QuerySpecification) node).setWhere(fixedPredicate);
             ExpressionAnalysis expressionAnalysis = analyzeExpression(predicate, scope);
             analysis.recordSubqueries(node, expressionAnalysis);
 

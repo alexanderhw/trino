@@ -17,13 +17,17 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Maps;
+import io.airlift.slice.Slice;
+import io.airlift.slice.Slices;
 import io.trino.Session;
 import io.trino.client.ClientCapabilities;
+import io.trino.client.ClientTypeSignature;
 import io.trino.client.Column;
 import io.trino.spi.Page;
 import io.trino.spi.TrinoException;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.BlockBuilder;
+import io.trino.spi.block.VariableWidthBlock;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.MapType;
@@ -37,12 +41,16 @@ import io.trino.spi.type.TimeWithTimeZoneType;
 import io.trino.spi.type.TimestampType;
 import io.trino.spi.type.TimestampWithTimeZoneType;
 import io.trino.spi.type.Type;
+import io.trino.spi.type.VarcharType;
 import jakarta.annotation.Nullable;
+import org.json.simple.JSONObject;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -66,11 +74,27 @@ public class QueryResultRows
         implements Iterable<List<Object>>
 {
     private final ConnectorSession session;
-    private final Optional<List<ColumnAndType>> columns;
+    private Optional<List<ColumnAndType>> columns;
     private final List<Page> pages;
     private final Optional<Consumer<Throwable>> exceptionConsumer;
     private final long totalRows;
     private final boolean supportsParametricDateTime;
+
+    public void resetColumns() {
+        if (columns.isEmpty()) {
+            return;
+        }
+        List<ColumnAndType> fixedColumns = new ArrayList<>(columns.get());
+        for (int i = 0; i < columns.get().size(); i++) {
+            ColumnAndType columnAndType = columns.get().get(i);
+            if (columnAndType.getType().getTypeSignature().getBase().equalsIgnoreCase("ObjectId")) {
+                columnAndType.setColumn(new Column(columns.get().get(i).column.getName(), "varchar", new ClientTypeSignature("varchar")));
+                columnAndType.setType(VarcharType.VARCHAR);
+                fixedColumns.set(i, columnAndType);
+            }
+        }
+        columns = Optional.of(fixedColumns);
+    }
 
     private QueryResultRows(Session session, Optional<List<ColumnAndType>> columns, List<Page> pages, Consumer<Throwable> exceptionConsumer)
     {
@@ -82,6 +106,10 @@ public class QueryResultRows
         this.supportsParametricDateTime = session.getClientCapabilities().contains(ClientCapabilities.PARAMETRIC_DATETIME.toString());
 
         verify(totalRows == 0 || (totalRows > 0 && columns.isPresent()), "data present without columns and types");
+    }
+
+    public List<Page> getPages() {
+        return pages;
     }
 
     public boolean isEmpty()
@@ -235,8 +263,16 @@ public class QueryResultRows
     private static class ColumnAndType
     {
         private final int position;
-        private final Column column;
-        private final Type type;
+        private Column column;
+        private Type type;
+
+        public void setColumn(Column column) {
+            this.column = column;
+        }
+
+        public void setType(Type type) {
+            this.type = type;
+        }
 
         private ColumnAndType(int position, Column column, Type type)
         {
@@ -317,11 +353,28 @@ public class QueryResultRows
             }
         }
 
+        private static final char[] HEX_CHARS = new char[]{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+
+        public String toHexString(byte[] var3) {
+            char[] chars = new char[var3.length * 2];
+            int i = 0;
+            int var4 = var3.length;
+
+            for (int var5 = 0; var5 < var4; ++var5) {
+                byte b = var3[var5];
+                chars[i++] = HEX_CHARS[b >> 4 & 15];
+                chars[i++] = HEX_CHARS[b & 15];
+            }
+
+            return new String(chars);
+        }
+
         @Nullable
         private List<Object> getRowValues()
         {
             // types are present if data is present
             List<ColumnAndType> columns = results.columns.orElseThrow();
+            List<ColumnAndType> fixedColumns = new ArrayList<>(columns);
             Object[] row = new Object[currentPage.getChannelCount()];
 
             for (int channel = 0; channel < currentPage.getChannelCount(); channel++) {
@@ -330,20 +383,54 @@ public class QueryResultRows
                 Block block = currentPage.getBlock(channel);
 
                 try {
-                    Object value = type.getObjectValue(results.session, block, inPageIndex);
+                    Object value;
+                    if (results.session.getSource().isPresent() && results.session.getSource().get().contains("grafana")
+                            && (column.getColumn().getName().equals("_id.oid") || column.getColumn().getName().equals("_id"))) {
+                        VariableWidthBlock variableWidthBlock = (VariableWidthBlock) block.getUnderlyingValueBlock();
+                        byte[] bytes = variableWidthBlock.getSlice(inPageIndex).getBytes();
+                        String val = toHexString(bytes);
+                        if (column.getColumn().getName().contains("_id.oid")) {
+                            value = val;
+                        } else if (column.getColumn().getName().contains("_id")) {
+                            Map<String, String> data = new HashMap<>();
+                            data.put("oid", val);
+                            value = JSONObject.toJSONString(data);
+                        } else {
+                            value = type.getObjectValue(results.session, block, inPageIndex);
+                        }
+                    } else {
+                        value = type.getObjectValue(results.session, block, inPageIndex);
+                    }
                     if (!results.supportsParametricDateTime) {
                         value = getLegacyValue(value, type);
                     }
                     row[channel] = value;
                 }
                 catch (Throwable throwable) {
-                    propagateException(rowPosition, column, throwable);
-                    // skip row as it contains non-serializable value
-                    return null;
+                    if (results.session.getSource().isPresent() && results.session.getSource().get().contains("grafana")) {
+                        VariableWidthBlock variableWidthBlock = (VariableWidthBlock) block.getUnderlyingValueBlock();
+                        byte[] bytes = variableWidthBlock.getSlice(inPageIndex).getBytes();
+                        Object value;
+                        String val = toHexString(bytes);
+                        if (column.getColumn().getName().contains("_id.oid")) {
+                            value = val;
+                        } else if (column.getColumn().getName().contains("_id")) {
+                            Map<String, String> data = new HashMap<>();
+                            data.put("oid", val);
+                            value = JSONObject.toJSONString(data);
+                        } else {
+                            value = type.getObjectValue(results.session, block, inPageIndex);
+                        }
+                        row[channel] = value;
+                    } else {
+                        propagateException(rowPosition, column, throwable);
+                        // skip row as it contains non-serializable value
+                        return null;
+                    }
                 }
             }
 
-            return unmodifiableList(Arrays.asList(row));
+            return Arrays.asList(row);
         }
 
         private Object getLegacyValue(Object value, Type type)

@@ -83,6 +83,6 @@ public class MongoPageSourceProvider
             return new EmptyPageSource();
         }
 
-        return new MongoPageSource(mongoSession, newTableHandle, handles.build());
+        return new MongoPageSource(session, mongoSession, newTableHandle, handles.build());
     }
 }

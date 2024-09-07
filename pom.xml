@@ -145,6 +145,9 @@
     </scm>
 
     <properties>
+        <maven.compiler.source>22</maven.compiler.source>
+        <maven.compiler.target>22</maven.compiler.target>
+        <java.version>22</java.version>
         <project.build.targetJdk>22</project.build.targetJdk>
         <!-- for reproducible build support, updated by release plugin -->
         <project.build.outputTimestamp>2024-08-15T21:46:31Z</project.build.outputTimestamp>

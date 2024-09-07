@@ -68,6 +68,9 @@ public class ObjectIdType
             return null;
         }
 
+        if (session.getSource().isPresent() && session.getSource().get().contains("grafana")) {
+            return getSlice(block, position).toStringUtf8();
+        }
         // TODO: There's no way to represent string value of a custom type
         return new SqlVarbinary(getSlice(block, position).getBytes());
     }

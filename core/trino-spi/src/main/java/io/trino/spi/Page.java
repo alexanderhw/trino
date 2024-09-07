@@ -53,6 +53,10 @@ public final class Page
     private volatile long retainedSizeInBytes = -1;
     private volatile long logicalSizeInBytes = -1;
 
+    public void setBlock(Block block, int position) {
+        this.blocks[position] = block;
+    }
+
     public Page(Block... blocks)
     {
         this(true, determinePositionCount(blocks), blocks);

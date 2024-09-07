@@ -24,9 +24,13 @@ import static java.util.Objects.requireNonNull;
 public final class Cast
         extends Expression
 {
-    private final Expression expression;
+    private Expression expression;
     private final DataType type;
     private final boolean safe;
+
+    public void setExpression(Expression expression) {
+        this.expression = requireNonNull(expression, "expression is null");
+    }
 
     public Cast(Expression expression, DataType type)
     {
