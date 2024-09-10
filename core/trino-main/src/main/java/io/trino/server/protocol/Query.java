@@ -506,10 +506,11 @@ class Query
                     fixedColumns.set(i, newCol);
                 } else if (column.getTypeSignature().getRawType().equals("ObjectId")) {
                     Column newCol = new Column(column.getName(), "varchar", new ClientTypeSignature("varchar"));
+                    newCol.setIsObjectId(true);
                     fixedColumns.set(i, newCol);
-                    resultRows.resetColumns();
                 }
             }
+            resultRows.resetColumns();
         }
 
         // first time through, self is null

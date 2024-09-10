@@ -23,6 +23,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -121,7 +122,7 @@ public class RelationType
     {
         return visibleFields.stream()
                 .filter(input -> input.matchesPrefix(prefix))
-                .collect(toImmutableList());
+                .collect(Collectors.toList());
     }
 
     /**

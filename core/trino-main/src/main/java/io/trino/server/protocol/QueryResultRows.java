@@ -17,8 +17,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Maps;
-import io.airlift.slice.Slice;
-import io.airlift.slice.Slices;
 import io.trino.Session;
 import io.trino.client.ClientCapabilities;
 import io.trino.client.ClientTypeSignature;
@@ -88,6 +86,12 @@ public class QueryResultRows
         for (int i = 0; i < columns.get().size(); i++) {
             ColumnAndType columnAndType = columns.get().get(i);
             if (columnAndType.getType().getTypeSignature().getBase().equalsIgnoreCase("ObjectId")) {
+                Column newCol = new Column(columns.get().get(i).column.getName(), "varchar", new ClientTypeSignature("varchar"));
+                newCol.setIsObjectId(true);
+                columnAndType.setColumn(newCol);
+                columnAndType.setType(VarcharType.VARCHAR);
+                fixedColumns.set(i, columnAndType);
+            } else if (columnAndType.getType().getTypeSignature().getBase().equals("row") || columnAndType.getType().getTypeSignature().getBase().equals("array")) {
                 columnAndType.setColumn(new Column(columns.get().get(i).column.getName(), "varchar", new ClientTypeSignature("varchar")));
                 columnAndType.setType(VarcharType.VARCHAR);
                 fixedColumns.set(i, columnAndType);
@@ -374,7 +378,6 @@ public class QueryResultRows
         {
             // types are present if data is present
             List<ColumnAndType> columns = results.columns.orElseThrow();
-            List<ColumnAndType> fixedColumns = new ArrayList<>(columns);
             Object[] row = new Object[currentPage.getChannelCount()];
 
             for (int channel = 0; channel < currentPage.getChannelCount(); channel++) {
@@ -384,17 +387,18 @@ public class QueryResultRows
 
                 try {
                     Object value;
-                    if (results.session.getSource().isPresent() && results.session.getSource().get().contains("grafana")
-                            && (column.getColumn().getName().equals("_id.oid") || column.getColumn().getName().equals("_id"))) {
-                        VariableWidthBlock variableWidthBlock = (VariableWidthBlock) block.getUnderlyingValueBlock();
-                        byte[] bytes = variableWidthBlock.getSlice(inPageIndex).getBytes();
-                        String val = toHexString(bytes);
-                        if (column.getColumn().getName().contains("_id.oid")) {
-                            value = val;
-                        } else if (column.getColumn().getName().contains("_id")) {
-                            Map<String, String> data = new HashMap<>();
-                            data.put("oid", val);
-                            value = JSONObject.toJSONString(data);
+                    if (results.session.getSource().isPresent() && results.session.getSource().get().contains("grafana")) {
+                        if (column.getColumn().getIsMongoObjectId()) {
+                            VariableWidthBlock variableWidthBlock = (VariableWidthBlock) block.getUnderlyingValueBlock();
+                            byte[] bytes = variableWidthBlock.getSlice(inPageIndex).getBytes();
+                            String val = toHexString(bytes);
+                            if (column.getColumn().getName().contains("oid")) {
+                                value = val;
+                            } else {
+                                Map<String, String> data = new HashMap<>();
+                                data.put("oid", val);
+                                value = JSONObject.toJSONString(data);
+                            }
                         } else {
                             value = type.getObjectValue(results.session, block, inPageIndex);
                         }
@@ -408,16 +412,18 @@ public class QueryResultRows
                 }
                 catch (Throwable throwable) {
                     if (results.session.getSource().isPresent() && results.session.getSource().get().contains("grafana")) {
-                        VariableWidthBlock variableWidthBlock = (VariableWidthBlock) block.getUnderlyingValueBlock();
-                        byte[] bytes = variableWidthBlock.getSlice(inPageIndex).getBytes();
                         Object value;
-                        String val = toHexString(bytes);
-                        if (column.getColumn().getName().contains("_id.oid")) {
-                            value = val;
-                        } else if (column.getColumn().getName().contains("_id")) {
-                            Map<String, String> data = new HashMap<>();
-                            data.put("oid", val);
-                            value = JSONObject.toJSONString(data);
+                        if (column.getColumn().getIsMongoObjectId()) {
+                            VariableWidthBlock variableWidthBlock = (VariableWidthBlock) block.getUnderlyingValueBlock();
+                            byte[] bytes = variableWidthBlock.getSlice(inPageIndex).getBytes();
+                            String val = toHexString(bytes);
+                            if (column.getColumn().getName().contains("oid")) {
+                                value = val;
+                            } else {
+                                Map<String, String> data = new HashMap<>();
+                                data.put("oid", val);
+                                value = JSONObject.toJSONString(data);
+                            }
                         } else {
                             value = type.getObjectValue(results.session, block, inPageIndex);
                         }

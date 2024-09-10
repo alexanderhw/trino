@@ -923,8 +923,7 @@ public class MongoSession
                 Document metadata = new Document();
                 metadata.append(FIELDS_NAME_KEY, key);
                 metadata.append(FIELDS_TYPE_KEY, fieldType.get().toString());
-                metadata.append(FIELDS_HIDDEN_KEY,
-                        key.equals("_id") && fieldType.get().equals(OBJECT_ID.getTypeSignature()));
+                metadata.append(FIELDS_HIDDEN_KEY, false);
 
                 builder.add(metadata);
             }

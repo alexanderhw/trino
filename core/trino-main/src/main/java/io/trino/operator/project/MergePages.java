@@ -14,6 +14,7 @@
 package io.trino.operator.project;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
 import io.trino.memory.context.AggregatedMemoryContext;
 import io.trino.memory.context.LocalMemoryContext;
 import io.trino.operator.WorkProcessor;
@@ -23,7 +24,10 @@ import io.trino.spi.PageBuilder;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.type.Type;
+import io.trino.spi.type.VarcharType;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -77,7 +81,7 @@ public final class MergePages
             WorkProcessor<Page> pages,
             AggregatedMemoryContext memoryContext)
     {
-        List<Type> typeList = ImmutableList.copyOf(requireNonNull(types, "types is null"));
+        List<Type> typeList = Lists.newArrayList(requireNonNull(types, "types is null"));
         WorkProcessor.Transformation<Page, Page> mergingTransform;
         if (typeList.isEmpty()) {
             // position count only mode
@@ -139,13 +143,13 @@ public final class MergePages
         private final long minPageSizeInBytes;
         private final int minRowCount;
         private final LocalMemoryContext memoryContext;
-        private final PageBuilder pageBuilder;
+        private PageBuilder pageBuilder;
 
         private Page queuedPage;
 
         private MergePagesTransformation(List<Type> types, long minPageSizeInBytes, int minRowCount, int maxPageSizeInBytes, LocalMemoryContext memoryContext)
         {
-            this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
+            this.types = requireNonNull(types, "types is null");
             checkArgument(minPageSizeInBytes >= 0, "minPageSizeInBytes must be greater or equal than zero");
             checkArgument(minRowCount >= 0, "minRowCount must be greater or equal than zero");
             checkArgument(maxPageSizeInBytes > 0, "maxPageSizeInBytes must be greater than zero");
@@ -204,11 +208,30 @@ public final class MergePages
         private void appendPage(Page page)
         {
             pageBuilder.declarePositions(page.getPositionCount());
-            for (int channel = 0; channel < types.size(); channel++) {
-                appendBlock(
-                        types.get(channel),
-                        page.getBlock(channel).getLoadedBlock(),
-                        pageBuilder.getBlockBuilder(channel));
+            try {
+                for (int channel = 0; channel < types.size(); channel++) {
+                    appendBlock(
+                            types.get(channel),
+                            page.getBlock(channel).getLoadedBlock(),
+                            pageBuilder.getBlockBuilder(channel));
+                }
+            } catch (Exception e) {
+                for (int channel = 0; channel < types.size(); channel++) {
+                    Type type = types.get(channel);
+                    if (type.getTypeSignature().getBase().equals("row") || type.getTypeSignature().getBase().equals("array")
+                            || type.getTypeSignature().getBase().equals("ObjectId")) {
+                        types.set(channel, VarcharType.VARCHAR);
+                    }
+                }
+
+                pageBuilder = PageBuilder.withMaxPageSize(PageBuilder.DEFAULT_INITIAL_EXPECTED_ENTRIES, types);
+                pageBuilder.declarePositions(page.getPositionCount());
+                for (int channel = 0; channel < types.size(); channel++) {
+                    appendBlock(
+                            types.get(channel),
+                            page.getBlock(channel),
+                            pageBuilder.getBlockBuilder(channel));
+                }
             }
         }
 

@@ -4687,6 +4687,16 @@ class StatementAnalyzer
                             }
                             throw semanticException(COLUMN_NOT_FOUND, allColumns, "SELECT * not allowed from relation that has no columns");
                         }
+//                        if (session.getSource().isPresent() && session.getSource().get().contains("grafana")) {
+//                            for (int i = 0; i < fields.size(); i++) {
+//                                Field field = fields.get(i);
+//                                String base = field.getType().getTypeSignature().getBase();
+//                                if (base.equals("ObjectId") || base.equals("row") || base.equals("array")) {
+//                                    fields.set(i, new Field(field.getRelationAlias(), field.getName(), VARCHAR,
+//                                            field.isHidden(), field.getOriginTable(), field.getOriginColumnName(), field.isAliased()));
+//                                }
+//                            }
+//                        }
                         boolean local = scope.isLocalScope(identifierChainBasis.getScope().orElseThrow());
                         analyzeAllColumnsFromTable(
                                 fields,
@@ -4763,7 +4773,7 @@ class StatementAnalyzer
 
             return fields.stream()
                     .filter(accessibleFields.build()::contains)
-                    .collect(toImmutableList());
+                    .collect(Collectors.toList());
         }
 
         private void analyzeAllColumnsFromTable(
@@ -4973,6 +4983,9 @@ class StatementAnalyzer
                     throw new RuntimeException("WiseMirror error, not found type");
                 }
                 for (SelectItem selectItem : node.getSelect().getSelectItems()) {
+                    if (!(selectItem instanceof SingleColumn)) {
+                        continue;
+                    }
                     Expression itemExpression = ((SingleColumn) selectItem).getExpression();
                     if (itemExpression instanceof DereferenceExpression d1) {
                         if (d1.getBase() instanceof Identifier) {

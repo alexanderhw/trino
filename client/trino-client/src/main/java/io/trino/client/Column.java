@@ -25,6 +25,8 @@ public class Column
     private final String name;
     private final String type;
     private final ClientTypeSignature typeSignature;
+    private boolean isObjectId = false;
+    private boolean isObjectOid = false;
 
     @JsonCreator
     public Column(
@@ -53,5 +55,21 @@ public class Column
     public ClientTypeSignature getTypeSignature()
     {
         return typeSignature;
+    }
+
+    public boolean getIsMongoObjectId() {
+        return isObjectId;
+    }
+
+    public void setIsObjectId(boolean isObjectId) {
+        this.isObjectId = isObjectId;
+    }
+
+    public boolean getIsObjectOid() {
+        return isObjectOid;
+    }
+
+    public void setIsObjectOid(boolean isObjectOid) {
+        this.isObjectOid = isObjectOid;
     }
 }

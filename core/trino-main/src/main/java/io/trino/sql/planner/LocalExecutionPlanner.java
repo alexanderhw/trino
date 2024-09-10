@@ -392,6 +392,7 @@ import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.HOURS;
 import static java.util.stream.Collectors.partitioningBy;
+import static java.util.stream.Collectors.toList;
 import static java.util.stream.IntStream.range;
 
 public class LocalExecutionPlanner
@@ -645,7 +646,16 @@ public class LocalExecutionPlanner
 
         List<Type> outputTypes = outputLayout.stream()
                 .map(Symbol::type)
-                .collect(toImmutableList());
+                .collect(toList());
+        if (session.getSource().isPresent() && session.getSource().get().contains("grafana")) {
+            for (int i = 0; i < outputTypes.size(); i++) {
+                Type outputType = outputTypes.get(i);
+                if (outputType.getTypeSignature().getBase().equals("row") || outputType.getTypeSignature().getBase().equals("array")
+                        || outputType.getTypeSignature().getBase().equals("ObjectId")) {
+                    outputTypes.set(i, VARCHAR);
+                }
+            }
+        }
 
         context.addDriverFactory(
                 true,
