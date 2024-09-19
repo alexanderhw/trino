@@ -158,7 +158,7 @@ public class MongoExtensionHandler {
 
     public Document queryTableMetadata(String appID, String database, String table, String databaseType) {
         Optional<Document> cached = Optional.ofNullable(storage.get(buildKey(appID, database, table)));
-        if (cached.isPresent()) {
+        if (cached.isPresent() || active) {
             return cached.get();
         }
 
@@ -179,7 +179,7 @@ public class MongoExtensionHandler {
                 for (Field field : tableMetadata.getFields()) {
                     Document fieldDocument = new Document();
                     fieldDocument.append("name", field.getName());
-                    fieldDocument.append("type", field.getType());
+                    fieldDocument.append("type", field.getType().replaceAll("@", "\""));
                     fieldDocument.append("hidden", field.isHidden());
                     builder.add(fieldDocument);
                 }
@@ -188,7 +188,7 @@ public class MongoExtensionHandler {
                 return document;
             }
         } catch (Exception e) {
-            log.error("Failed to query table metadata", e);
+            log.error("Failed to query table metadata: " + e.getLocalizedMessage());
         } finally {
             if (connection != null) {
                 try {

@@ -77,6 +77,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -784,54 +785,23 @@ public class MongoSession
             throws TableNotFoundException
     {
         MongoDatabase db = client.getDatabase(schemaName);
-        MongoCollection<Document> schema = db.getCollection(schemaCollection);
 
-//        Document doc = schema
-//                .find(new Document(TABLE_NAME_KEY, tableName)).first();
-        Document doc = MongoExtensionHandler.getInstance().queryTableMetadata("", schemaName, tableName, "mongodb");
+        System.out.println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+        Document doc = MongoExtensionHandler.getInstance().queryTableMetadata("ms", schemaName, tableName, "mongodb");
 
         if (doc == null) {
             if (!collectionExists(db, tableName)) {
                 throw new TableNotFoundException(new SchemaTableName(schemaName, tableName), format("Table '%s.%s' not found", schemaName, tableName), null);
             }
 
-            Document mongoDoc = db.getCollection(tableName).find().first();
-            Document inMemDoc = new Document("table", tableName);
-            Document storeDoc = new Document("table", tableName);
-            ImmutableList.Builder<Document> inMemBuilder = ImmutableList.builder();
-            ImmutableList.Builder<Document> storeBuilder = ImmutableList.builder();
-            if (mongoDoc == null) {
-                inMemDoc.append("fields", inMemBuilder.build());
-                storeDoc.append("fields", storeBuilder.build());
-                return inMemDoc;
-            }
+            Document inMemDoc = new Document(TABLE_NAME_KEY, tableName);
+            Document storeDoc = new Document(TABLE_NAME_KEY, tableName);
+            List<Document> guessedFields = guessTableFields(schemaName, tableName);
 
-            for (String key : mongoDoc.keySet()) {
-                Object value = mongoDoc.get(key);
-                Optional<TypeSignature> fieldType = guessFieldType(value);
-                if (fieldType.isPresent()) {
-                    String storeTypeName = fieldType.get().toString();
-                    Document inMemMetadata = new Document();
-                    inMemMetadata.append("name", key);
-                    inMemMetadata.append("type", storeTypeName);
-                    inMemMetadata.append("hidden", false);
-                    inMemBuilder.add(inMemMetadata);
-
-                    Document storeMetadata = new Document();
-                    storeMetadata.append("name", key);
-                    storeMetadata.append("type", storeTypeName.replaceAll("\"", "@"));
-                    storeMetadata.append("hidden", false);
-                    storeBuilder.add(storeMetadata);
-                }
-            }
-
-            inMemDoc.append("fields", inMemBuilder.build());
-            storeDoc.append("fields", storeBuilder.build());
-            Document metadata = new Document(TABLE_NAME_KEY, tableName);
-            metadata.append(FIELDS_KEY, guessTableFields(schemaName, tableName));
-
-            MongoExtensionHandler.getInstance().maintainTableMetadata("", schemaName, tableName, "mongodb", metadata);
-            return metadata;
+            inMemDoc.append(FIELDS_KEY, ImmutableList.of(guessedFields));
+            storeDoc.append(FIELDS_KEY, guessedFields);
+            MongoExtensionHandler.getInstance().maintainTableMetadata("ms", schemaName, tableName, "mongodb", storeDoc);
+            return inMemDoc;
         }
 
         return doc;
@@ -905,12 +875,8 @@ public class MongoSession
         return result.getDeletedCount() == 1;
     }
 
-    private List<Document> guessTableFields(String schemaName, String tableName)
-    {
-        MongoDatabase db = client.getDatabase(schemaName);
-        Document doc = db.getCollection(tableName).find().first();
+    private List<Document> doGuess(Document doc) {
         if (doc == null) {
-            // no records at the collection
             return ImmutableList.of();
         }
 
@@ -932,6 +898,37 @@ public class MongoSession
             }
         }
 
+        return builder.build();
+    }
+
+    private List<Document> guessTableFields(String schemaName, String tableName)
+    {
+        MongoDatabase db = client.getDatabase(schemaName);
+        FindIterable<Document> limited = db.getCollection(tableName).find().limit(1000);
+        Map<String, String> fieldsMap = new HashMap<>();
+        ImmutableList.Builder<Document> builder = ImmutableList.builder();
+        try (MongoCursor<Document> iterator = limited.iterator()) {
+            while (iterator.hasNext()) {
+                Document doc = iterator.next();
+                List<Document> fields = doGuess(doc);
+                for (Document field : fields) {
+                    String fieldName = field.getString(FIELDS_NAME_KEY);
+                    String fieldType = field.getString(FIELDS_TYPE_KEY);
+                    boolean hidden = field.getBoolean(FIELDS_HIDDEN_KEY);
+
+                    if (!fieldsMap.containsKey(fieldName)) {
+                        fieldsMap.put(fieldName, fieldType);
+
+                        Document md = new Document();
+                        md.append(FIELDS_NAME_KEY, fieldName);
+                        md.append(FIELDS_TYPE_KEY, fieldType);
+                        md.append(FIELDS_HIDDEN_KEY, hidden);
+
+                        builder.add(md);
+                    }
+                }
+            }
+        }
         return builder.build();
     }
 
